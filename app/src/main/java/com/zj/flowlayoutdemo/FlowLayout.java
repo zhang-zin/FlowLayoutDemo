@@ -2,8 +2,15 @@ package com.zj.flowlayoutdemo;
 
 import android.content.Context;
 import android.util.AttributeSet;
+import android.util.Log;
+import android.view.MotionEvent;
+import android.view.VelocityTracker;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.widget.OverScroller;
+
+import androidx.core.view.ViewConfigurationCompat;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -20,18 +27,31 @@ public class FlowLayout extends ViewGroup {
      * 用来判断是不是一次滑动
      */
     private int mTouchSlop;
+    private OverScroller mScroller;
+    private int mMinimumVelocity;
+    private int mMaximumVelocity;
+    private float mLastInterceptX;
+    private float mLastInterceptY;
+    private VelocityTracker mVelocityTracker;
+    private float mLastY;
+    private boolean isScroller;
 
 
     public FlowLayout(Context context) {
-        super(context);
+        this(context, null);
     }
 
     public FlowLayout(Context context, AttributeSet attrs) {
-        super(context, attrs);
+        this(context, attrs, 0);
     }
 
     public FlowLayout(Context context, AttributeSet attrs, int defStyleAttr) {
         super(context, attrs, defStyleAttr);
+        ViewConfiguration viewConfiguration = ViewConfiguration.get(context);
+        mTouchSlop = ViewConfigurationCompat.getScaledPagingTouchSlop(viewConfiguration);
+        mScroller = new OverScroller(context);
+        mMinimumVelocity = viewConfiguration.getScaledMinimumFlingVelocity();
+        mMaximumVelocity = viewConfiguration.getScaledMaximumFlingVelocity();
     }
 
     private void init() {
@@ -47,7 +67,7 @@ public class FlowLayout extends ViewGroup {
         int widthMeasureSize = MeasureSpec.getSize(widthMeasureSpec);
         int heightMeasureMode = MeasureSpec.getMode(heightMeasureSpec);
         int heightMeasureSize = MeasureSpec.getSize(heightMeasureSpec);
-
+        measureHeight = heightMeasureSize;
         init();
 
         // 当前行的宽和高
@@ -98,6 +118,8 @@ public class FlowLayout extends ViewGroup {
             flowLayoutHeight = Math.max(heightMeasureSize, flowLayoutHeight);
         }
         //FlowLayout最终宽高
+        realHeight = flowLayoutHeight;
+        isScroller = realHeight > measureHeight;
         setMeasuredDimension(widthMeasureMode == MeasureSpec.EXACTLY ? widthMeasureSize : flowLayoutWidth, flowLayoutHeight);
     }
 
@@ -118,6 +140,105 @@ public class FlowLayout extends ViewGroup {
             }
             curY += lineHeight;
             curX = 0;
+        }
+    }
+
+    @Override
+    public boolean onInterceptTouchEvent(MotionEvent ev) {
+        boolean intercept = false;
+        float interceptX = ev.getX();
+        float interceptY = ev.getY();
+        switch (ev.getAction()) {
+            case MotionEvent.ACTION_DOWN:
+                mLastInterceptX = ev.getX();
+                mLastInterceptY = ev.getY();
+                intercept = false;
+                break;
+            case MotionEvent.ACTION_MOVE:
+                float dx = interceptX - mLastInterceptX;
+                float dy = interceptY = mLastInterceptY;
+                if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > mTouchSlop) {
+                    intercept = true;
+                }
+                break;
+            case MotionEvent.ACTION_UP:
+                intercept = false;
+                break;
+            default:
+                intercept = false;
+                break;
+        }
+        mLastInterceptX = interceptX;
+        mLastInterceptY = interceptY;
+        Log.e("zhang", "onInterceptTouchEvent: " + intercept);
+        return intercept;
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        if (!isScroller) {
+            return super.onTouchEvent(event);
+        }
+        initVelocityTrackerIfNotExists();
+        mVelocityTracker.addMovement(event);
+        float currY = event.getY();
+        switch (event.getAction()) {
+            case MotionEvent.ACTION_DOWN:
+                if (!mScroller.isFinished()) {
+                    mScroller.abortAnimation();
+                }
+                mLastY = currY;
+                break;
+            case MotionEvent.ACTION_MOVE:
+                float dy = mLastY - currY;//本次手势滑动了多大距离
+                mScroller.startScroll(0, mScroller.getFinalY(), 0, (int) dy);//mCurrY = oldScrollY + dy*scale;
+                invalidate();
+                Log.e("zhang", "onTouchEvent: " + dy);
+                mLastY = currY;
+                break;
+            case MotionEvent.ACTION_UP:
+                final VelocityTracker velocityTracker = mVelocityTracker;
+                velocityTracker.computeCurrentVelocity(1000, mMaximumVelocity);
+                int initialVelocity = (int) velocityTracker.getYVelocity();
+
+                if ((Math.abs(initialVelocity) > mMinimumVelocity)) {
+                    fling(-initialVelocity);
+                } else if (mScroller.springBack(getScrollX(), getScrollY(), 0, 0, 0,
+                        (realHeight - measureHeight))) {
+                    postInvalidateOnAnimation();
+                }
+                break;
+            default:
+                break;
+        }
+        return super.onTouchEvent(event);
+    }
+
+    @Override
+    public void computeScroll() {
+        super.computeScroll();
+        if (mScroller.computeScrollOffset()) {
+            scrollTo(0, mScroller.getCurrY());
+            postInvalidate();
+        }
+
+    }
+
+    private void initVelocityTrackerIfNotExists() {
+        if (mVelocityTracker == null) {
+            mVelocityTracker = VelocityTracker.obtain();
+        }
+    }
+
+    public void fling(int velocityY) {
+        if (getChildCount() > 0) {
+            int height = measureHeight;
+            int bottom = realHeight;
+
+            mScroller.fling(getScrollX(), getScrollY(), 0, velocityY, 0, 0, 0,
+                    Math.max(0, bottom - height), 0, height / 2);
+
+            postInvalidateOnAnimation();
         }
     }
 }
